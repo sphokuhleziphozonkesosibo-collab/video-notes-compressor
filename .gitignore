@@ -1,0 +1,13 @@
+.env
+.env*.local
+venv/
+__pycache__/
+uploads/
+chunks/
+*.mp4
+*.mp3
+*.wav
+*.png
+*.jpg
+frontend/node_modules/
+frontend/.next/
