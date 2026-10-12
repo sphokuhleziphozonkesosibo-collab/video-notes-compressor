@@ -27,7 +27,7 @@ if not groq_key or not gemini_key:
 groq_client = Groq(api_key=groq_key)
 gemini_client = genai.Client(api_key=gemini_key)
 
-app = FastAPI(title="LectureOS Enterprise Academic Platform - Auth Edition")
+app = FastAPI(title="LectureOS Multi-Tenant Platform")
 
 app.add_middleware(
     CORSMiddleware,
@@ -45,12 +45,11 @@ os.makedirs(CHUNKS_DIR, exist_ok=True)
 
 app.mount("/audio", StaticFiles(directory=UPLOAD_DIR), name="audio")
 
-# ----------------- DATABASE INITIALIZATION (SQLITE) -----------------
+# ----------------- DATABASE (SQLITE) -----------------
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # Students Table
     c.execute('''
         CREATE TABLE IF NOT EXISTS students (
             id TEXT PRIMARY KEY,
@@ -61,7 +60,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Student Lectures Library Table
     c.execute('''
         CREATE TABLE IF NOT EXISTS lectures (
             id TEXT PRIMARY KEY,
@@ -99,7 +97,7 @@ def get_student_by_token(token: str):
 
 JOBS_STORE = {}
 
-# ----------------- AUTHENTICATION ROUTES -----------------
+# ----------------- AUTHENTICATION -----------------
 
 class RegisterRequest(BaseModel):
     email: str
@@ -125,7 +123,6 @@ def register(req: RegisterRequest):
     )
     conn.commit()
     conn.close()
-
     return {"token": token, "email": req.email, "university": req.university}
 
 class LoginRequest(BaseModel):
@@ -144,7 +141,7 @@ def login(req: LoginRequest):
     row = c.fetchone()
     if not row:
         conn.close()
-        raise HTTPException(status_code=401, detail="Invalid university email or password.")
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
 
     token = row[3]
     conn.close()
@@ -155,7 +152,7 @@ def get_me(authorization: Optional[str] = Header(None)):
     token = authorization.replace("Bearer ", "") if authorization else None
     student = get_student_by_token(token)
     if not student:
-        raise HTTPException(status_code=401, detail="Session expired or invalid token.")
+        raise HTTPException(status_code=401, detail="Unauthorized")
     return student
 
 @app.get("/api/student/lectures")
@@ -177,15 +174,8 @@ def get_student_lectures(authorization: Optional[str] = Header(None)):
     lectures = []
     for r in rows:
         lectures.append({
-            "id": r[0],
-            "module_code": r[1],
-            "file_name": r[2],
-            "audio_url": r[3],
-            "audio_size_mb": r[4],
-            "data_saved_pct": r[5],
-            "notes": r[6],
-            "transcript": r[7],
-            "created_at": r[8]
+            "id": r[0], "module_code": r[1], "file_name": r[2], "audio_url": r[3],
+            "audio_size_mb": r[4], "data_saved_pct": r[5], "notes": r[6], "transcript": r[7], "created_at": r[8]
         })
     return {"lectures": lectures}
 
@@ -241,28 +231,28 @@ def run_talk_pipeline(student_id: str, job_id: str, audio_path: str, filename: s
         formatted_segments, formatted_transcript = chunk_and_transcribe(audio_path, student_id, job_id)
 
         JOBS_STORE[student_id][job_id]["step"] = 3
-        JOBS_STORE[student_id][job_id]["status_message"] = "Synthesizing notes with Gemini 1M-token engine..."
+        JOBS_STORE[student_id][job_id]["status_message"] = "Synthesizing exhaustive academic study guide..."
 
         system_prompt = f"""
-        You are a university faculty professor for the module: {module_code}.
-        Analyze this full transcript and produce structured academic notes in GitHub Markdown:
+        You are a university faculty professor and examiner for module: {module_code}.
+        The student's goal is to PASS their final examination using ONLY these notes.
+        Produce an exhaustive, textbook-grade study pack in GitHub Markdown:
 
-        ### 🏛️ Module Overview & Classification ({module_code})
-        - Status: Verified by Academic Faculty ✅
-        - Governing Thesis: 2-sentence summary.
+        # 🏛️ {module_code}: Comprehensive Examination Master Guide
+        > 🚨 **FACULTY EXAM MANDATE**: Verified by Academic Faculty. Full curriculum depth.
 
-        ### 🚨 High-Yield Exam Signals
-        List all specific exam warnings, question patterns, and marks mentioned with exact [MM:SS] timestamps.
+        ## 📖 CHRONOLOGICAL CHAPTERS
+        Break transcript into distinct detailed chapters [Timestamp Range]:
+        - **Core Theory & Definitions**
+        - **Essential Formulations & Proofs** (LaTeX $$)
+        - **Step-by-Step Worked Examples with Numbers**
+        - > ⚠️ **COMMON EXAM TRAP**: Specific mistakes students make.
 
-        ### 📐 Academic Formulations & Methods
-        Clean LaTeX formulas ($$), algorithms, derivations, or legal tests with timestamps.
+        ## 📐 MASTER FORMULA & ALGORITHM COMPENDIUM
+        | Law / Concept | Formula / Code | Variables & Conditions | Timestamp |
 
-        ### 🔬 Deep-Dive Step-by-Step Concepts
-        Step-by-step logic for the 3 primary concepts taught.
-
-        ### 🇿🇦 DHET Indigenous Language Terminology Bridge (isiZulu / English)
-        Provide a 4-item technical glossary translating key scientific terms into academic isiZulu:
-        - Format: **English Term** [Timestamp] ↔ **Igama lesiZulu**: Contextual definition.
+        ## 🇿🇦 DHET INDIGENOUS LANGUAGE TERMINOLOGY BRIDGE
+        | English Term | Timestamp | Igama lesiZulu | Contextual Meaning |
         """
 
         summary_response = gemini_client.models.generate_content(
@@ -282,16 +272,12 @@ def run_talk_pipeline(student_id: str, job_id: str, audio_path: str, filename: s
             "audio_size_mb": round(comp_mb, 2),
             "data_saved_pct": 92.5,
             "faculty_verified": True,
-            "confusion_spikes": [
-                {"timestamp": "14:20", "topic": "Auxiliary Derivation", "danger": "High (74% student replay spike)"},
-                {"timestamp": "32:15", "topic": "Boundary Substitution", "danger": "Moderate (58% review rate)"}
-            ],
             "segments": formatted_segments,
             "transcript": formatted_transcript,
             "notes": summary_response.text
         }
 
-        # Save to SQLite Database permanently under this student's account
+        # Save to SQLite
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute(
@@ -352,7 +338,6 @@ def run_math_pipeline(student_id: str, job_id: str, temp_file_path: str, filenam
             "solution": response.text
         }
 
-        # Save to SQLite DB
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute(
@@ -374,11 +359,75 @@ def run_math_pipeline(student_id: str, job_id: str, temp_file_path: str, filenam
         JOBS_STORE[student_id][job_id]["error"] = str(e)
 
 
-# ----------------- PROTECTED UPLOAD ROUTES -----------------
+# ----------------- YOUTUBE / TEAMS URL WORKER -----------------
+
+def download_and_process_url(student_id: str, job_id: str, url: str, module_code: str):
+    try:
+        JOBS_STORE[student_id][job_id]["step"] = 1
+        JOBS_STORE[student_id][job_id]["status_message"] = "Streaming audio server-to-server (0MB mobile data used)..."
+        
+        student_dir = os.path.join(UPLOAD_DIR, student_id)
+        os.makedirs(student_dir, exist_ok=True)
+        
+        output_template = os.path.join(student_dir, f"{job_id}_stream.%(ext)s")
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': output_template,
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '32',
+            }],
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web']
+                }
+            },
+            'nocheckcertificate': True,
+            'quiet': True,
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+
+        final_audio_path = os.path.join(student_dir, f"{job_id}_stream.mp3")
+        run_talk_pipeline(student_id, job_id, final_audio_path, "YouTube Stream Lecture", module_code)
+    except Exception as e:
+        JOBS_STORE[student_id][job_id]["status"] = "failed"
+        JOBS_STORE[student_id][job_id]["error"] = f"Failed to stream URL: {str(e)}"
+
+# ----------------- INGESTION ROUTES -----------------
 
 @app.get("/")
 def home():
     return {"status": "online"}
+
+class URLRequest(BaseModel):
+    url: str
+    module_code: str = "GENERAL"
+
+@app.post("/api/process/url")
+async def process_lecture_url(
+    background_tasks: BackgroundTasks, 
+    req: URLRequest,
+    authorization: Optional[str] = Header(None)
+):
+    token = authorization.replace("Bearer ", "") if authorization else None
+    student = get_student_by_token(token)
+    if not student:
+        raise HTTPException(status_code=401, detail="Please log in first.")
+
+    student_id = student["id"]
+    job_id = str(uuid.uuid4())
+    JOBS_STORE.setdefault(student_id, {})[job_id] = {
+        "status": "processing",
+        "step": 0,
+        "status_message": f"Connecting to stream for {req.module_code}...",
+        "result": None,
+        "error": None
+    }
+    background_tasks.add_task(download_and_process_url, student_id, job_id, req.url, req.module_code)
+    return {"job_id": job_id, "status": "processing"}
 
 @app.post("/api/process/talk")
 async def start_talk_job(
@@ -390,7 +439,7 @@ async def start_talk_job(
     token = authorization.replace("Bearer ", "") if authorization else None
     student = get_student_by_token(token)
     if not student:
-        raise HTTPException(status_code=401, detail="Please log in to your student account first.")
+        raise HTTPException(status_code=401, detail="Please log in first.")
 
     student_id = student["id"]
     student_dir = os.path.join(UPLOAD_DIR, student_id)
@@ -412,7 +461,7 @@ async def start_talk_job(
     JOBS_STORE.setdefault(student_id, {})[job_id] = {
         "status": "processing",
         "step": 1,
-        "status_message": f"Audio secured in student vault ({student['email']}). Processing...",
+        "status_message": f"Audio secured for {module_code}. Processing...",
         "result": None,
         "error": None
     }
@@ -430,7 +479,7 @@ async def start_math_job(
     token = authorization.replace("Bearer ", "") if authorization else None
     student = get_student_by_token(token)
     if not student:
-        raise HTTPException(status_code=401, detail="Please log in to your student account first.")
+        raise HTTPException(status_code=401, detail="Please log in first.")
 
     student_id = student["id"]
     student_dir = os.path.join(UPLOAD_DIR, student_id)
@@ -462,7 +511,7 @@ def get_job_status(job_id: str, authorization: Optional[str] = Header(None)):
 
     student_jobs = JOBS_STORE.get(student["id"], {})
     if job_id not in student_jobs:
-        raise HTTPException(status_code=403, detail="Forbidden: You cannot view another student's lecture.")
+        raise HTTPException(status_code=403, detail="Forbidden: Private student vault.")
     return student_jobs[job_id]
 
 # ----------------- HOMEWORK, EXAM, CHAT -----------------
@@ -497,7 +546,7 @@ class QuizRequest(BaseModel):
 async def generate_comprehensive_exam(req: QuizRequest):
     diff_label = "Final Exam" if req.difficulty == "exam" else "Class Test"
     prompt = f"""
-    Create a {diff_label} paper based on this lecture transcript.
+    Create a {diff_label} paper based on this transcript.
     Return ONLY a single valid JSON object:
     {{
       "exam_title": "{diff_label} - Faculty Paper",
@@ -533,12 +582,20 @@ async def chat_with_lecture(req: ChatRequest):
     return {"answer": chat_res.text}
 
 @app.post("/api/voice-chat")
-async def voice_chat_with_lecture(audio: UploadFile = File(...), transcript: str = Form(...)):
-    temp_voice_path = os.path.join(UPLOAD_DIR, f"voice_{uuid.uuid4()}.mp3")
+async def voice_chat_with_lecture(
+    audio: UploadFile = File(...),
+    transcript: Optional[str] = Form(default="")
+):
+    """Answers student voice questions using native webm Whisper decoding. Works for lectures OR general university questions!"""
+    # Detect proper extension from incoming audio (e.g. webm, wav, mp3)
+    ext = os.path.splitext(audio.filename)[1] or ".webm"
+    temp_voice_path = os.path.join(UPLOAD_DIR, f"voice_{uuid.uuid4()}{ext}")
+    
     with open(temp_voice_path, "wb") as buffer:
         shutil.copyfileobj(audio.file, buffer)
 
     try:
+        # 1. Transcribe the spoken voice note with Whisper
         with open(temp_voice_path, "rb") as file:
             student_voice_text = groq_client.audio.transcriptions.create(
                 file=(temp_voice_path, file.read()),
@@ -546,9 +603,38 @@ async def voice_chat_with_lecture(audio: UploadFile = File(...), transcript: str
                 response_format="text"
             ).strip()
 
-        prompt = f"Answer student voice question citing timestamps: Transcript: {transcript[:60000]}\nQuestion: {student_voice_text}"
-        chat_res = gemini_client.models.generate_content(model="gemini-3.5-flash-lite", contents=[prompt])
-        return {"user_question": student_voice_text, "answer": chat_res.text}
+        # 2. Answer using lecture transcript IF available, otherwise act as a general academic professor!
+        if transcript and len(transcript.strip()) > 50:
+            prompt = f"""
+            You are a university teaching professor.
+            Answer the student's spoken question based on this lecture transcript. Cite timestamps [MM:SS] and show formulas/code where applicable:
+
+            Transcript:
+            {transcript[:50000]}
+
+            Student Question:
+            "{student_voice_text}"
+            """
+        else:
+            prompt = f"""
+            You are an elite university professor across Engineering, Science, Law, and Mathematics.
+            Answer this student's spoken question with complete academic rigor, step-by-step derivations, and clean LaTeX ($$) or code blocks:
+
+            Student Question:
+            "{student_voice_text}"
+            """
+
+        chat_res = gemini_client.models.generate_content(
+            model="gemini-3.5-flash-lite",
+            contents=[prompt]
+        )
+
+        return {
+            "user_question": student_voice_text,
+            "answer": chat_res.text
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Voice processing error: {str(e)}")
     finally:
         if os.path.exists(temp_voice_path):
             os.remove(temp_voice_path)

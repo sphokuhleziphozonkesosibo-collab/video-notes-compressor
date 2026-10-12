@@ -27,12 +27,10 @@ import {
   Eye, 
   Mic, 
   Square,
+  Link as LinkIcon,
   ShieldCheck,
-  Calendar,
   PenTool,
   Folder,
-  CheckCircle,
-  TrendingDown,
   Plus,
   Trash2,
   Lock,
@@ -53,11 +51,14 @@ export default function Home() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  // App Modes & Tabs
-  const [mode, setMode] = useState<"talk" | "math" | "homework">("talk");
+  // Ingestion Modes: "talk" | "url" | "math" | "homework"
+  const [mode, setMode] = useState<"talk" | "url" | "math" | "homework">("url");
   const [file, setFile] = useState<File | null>(null);
+  const [lectureUrl, setLectureUrl] = useState("");
   const [homeworkProblem, setHomeworkProblem] = useState("");
-  const [activeTab, setActiveTab] = useState<"notes" | "flashcards" | "exam" | "studyplan" | "homework" | "audio" | "tutor">("notes");
+
+  // Workspaces: "notes" | "flashcards" | "exam" | "audio" | "tutor"
+  const [activeTab, setActiveTab] = useState<"notes" | "flashcards" | "exam" | "audio" | "tutor">("notes");
   
   // Pipeline State
   const [jobId, setJobId] = useState<string | null>(null);
@@ -75,7 +76,7 @@ export default function Home() {
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Dynamic Module Library State (Starts completely empty for every new student!)
+  // Dynamic Module Library
   const [modules, setModules] = useState<Array<{ code: string; name: string }>>([]);
   const [activeModule, setActiveModule] = useState<{ code: string; name: string } | null>(null);
   const [isAddingModule, setIsAddingModule] = useState(false);
@@ -90,16 +91,8 @@ export default function Home() {
   const [examDifficulty, setExamDifficulty] = useState<"test" | "exam">("exam");
   const [examData, setExamData] = useState<any>(null);
   const [examLoading, setExamLoading] = useState(false);
-  const [mcqAnswers, setMcqAnswers] = useState<{ [key: number]: number }>({});
-  const [mcqSubmitted, setMcqSubmitted] = useState(false);
-  const [revealedSolutions, setRevealedSolutions] = useState<{ [key: number]: boolean }>({});
-  const [weakTopics, setWeakTopics] = useState<string[]>([]);
 
-  // Homework Review
-  const [homeworkReview, setHomeworkReview] = useState<string | null>(null);
-  const [homeworkLoading, setHomeworkLoading] = useState(false);
-
-  // Chat & Voice Recording
+  // Chat & Voice Recording State
   const [chatQuestion, setChatQuestion] = useState("");
   const [chatMessages, setChatMessages] = useState<Array<{ sender: "user" | "ai"; text: string }>>([]);
   const [chatLoading, setChatLoading] = useState(false);
@@ -108,7 +101,7 @@ export default function Home() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
-  // Check Token & Load User Data
+  // Load User Data & Token on mount
   useEffect(() => {
     const savedTheme = localStorage.getItem("app_theme") as "light" | "dark" | null;
     if (savedTheme) setTheme(savedTheme);
@@ -289,6 +282,7 @@ export default function Home() {
 
         if (data.status === "completed") {
           setResult(data.result);
+          localStorage.setItem("academic_lecture_notes", JSON.stringify(data.result));
           buildFlashcards(data.result.notes || data.result.solution);
           setLoading(false);
           setActiveTab("notes");
@@ -313,16 +307,12 @@ export default function Home() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!file) {
-      setError("Please select a file to process.");
-      return;
-    }
     if (!studentToken) {
       setError("Please log in to your student account first.");
       return;
     }
     if (!activeModule) {
-      setError("Please click '+ Add' on the left sidebar to add your course module first (e.g. LAWS101, ACCT202).");
+      setError("Please click '+ Add' on the left sidebar to add your course module first.");
       return;
     }
 
@@ -331,21 +321,36 @@ export default function Home() {
     setResult(null);
     setStatusMessage("Locking file into private student vault...");
 
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("module_code", activeModule.code);
-
-    const endpoint = mode === "talk" ? "http://127.0.0.1:8000/api/process/talk" : "http://127.0.0.1:8000/api/process/math";
-
     try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${studentToken}` },
-        body: formData
-      });
+      let res;
+      if (mode === "url") {
+        if (!lectureUrl.trim()) throw new Error("Please enter a valid YouTube or Teams URL.");
+        res = await fetch("http://127.0.0.1:8000/api/process/url", {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${studentToken}`
+          },
+          body: JSON.stringify({ 
+            url: lectureUrl.trim(),
+            module_code: activeModule ? activeModule.code : "CODE101"
+          }),
+        });
+      } else {
+        if (!file) throw new Error("Please select a file to process.");
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("module_code", activeModule.code);
+        const endpoint = mode === "talk" ? "http://127.0.0.1:8000/api/process/talk" : "http://127.0.0.1:8000/api/process/math";
+        res = await fetch(endpoint, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${studentToken}` },
+          body: formData,
+        });
+      }
 
-      if (!response.ok) throw new Error("Upload failed. Ensure backend is running.");
-      const data = await response.json();
+      if (!res.ok) throw new Error("Processing failed. Make sure backend is running.");
+      const data = await res.json();
       setJobId(data.job_id);
       setJobStatus("processing");
     } catch (err: any) {
@@ -354,14 +359,76 @@ export default function Home() {
     }
   };
 
+  // ----------------- VOICE RECORDING LOGIC (RESTORED!) -----------------
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+      
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") 
+        ? "audio/webm;codecs=opus" 
+        : (MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4");
+
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+        stream.getTracks().forEach((track) => track.stop());
+
+        setChatLoading(true);
+        const formData = new FormData();
+        formData.append("audio", audioBlob, "student_voice.webm");
+        formData.append("transcript", result?.transcript || "");
+
+        try {
+          const res = await fetch("http://127.0.0.1:8000/api/voice-chat", {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!res.ok) {
+            const errData = await res.json();
+            throw new Error(errData.detail || "Server failed to process voice note.");
+          }
+
+          const data = await res.json();
+          setChatMessages((prev) => [
+            ...prev,
+            { sender: "user", text: `🎙️ "${data.user_question}"` },
+            { sender: "ai", text: data.answer },
+          ]);
+        } catch (err: any) {
+          alert(`Voice error: ${err.message}`);
+        } finally {
+          setChatLoading(false);
+        }
+      };
+
+      mediaRecorderRef.current = mediaRecorder;
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (err: any) {
+      alert(`Microphone error: ${err.message}`);
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
   const handleGenerateExam = async () => {
     if (!result?.transcript) return;
     setExamLoading(true);
     setExamData(null);
-    setMcqAnswers({});
-    setMcqSubmitted(false);
-    setRevealedSolutions({});
-    setWeakTopics([]);
 
     try {
       const res = await fetch("http://127.0.0.1:8000/api/generate-exam", {
@@ -385,10 +452,25 @@ export default function Home() {
     }
   };
 
+  const exportWordDoc = () => {
+    const text = result?.notes || result?.solution;
+    if (!text) return;
+    const blob = new Blob([text], { type: "application/msword;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `${result?.file_name || "lecture"}_study_guide.doc`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const isLight = theme === "light";
   const bgMain = isLight ? "bg-[#fcfcfd] text-[#1c1d21]" : "bg-[#090a0f] text-[#f2f2f3]";
   const cardBg = isLight ? "bg-white border-[#eaebed] shadow-[0_1px_3px_rgba(0,0,0,0.04)]" : "bg-[#12141c] border-[#1e2230] shadow-2xl";
   const textMuted = isLight ? "text-[#71737d]" : "text-[#8a8c96]";
+  const activePill = "bg-indigo-600 text-white shadow-sm font-semibold";
+  const inactivePill = isLight ? "text-[#555761] hover:text-black" : "text-[#9a9ca6] hover:text-white";
 
   // ----------------- LOGIN / REGISTER PORTAL -----------------
   if (!studentToken) {
@@ -504,7 +586,7 @@ export default function Home() {
           </button>
         </div>
 
-        {/* Student Profile & Logout */}
+        {/* Student Profile */}
         <div className="p-3 rounded-2xl border bg-indigo-50/40 dark:bg-indigo-950/20 border-indigo-200/50 space-y-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 truncate">
@@ -538,7 +620,7 @@ export default function Home() {
               />
               <input
                 type="text"
-                placeholder="Course Name (e.g. Criminal Law)"
+                placeholder="Course Name"
                 value={newModuleName}
                 onChange={(e) => setNewModuleName(e.target.value)}
                 className="w-full px-2.5 py-1.5 text-xs rounded-lg border bg-white dark:bg-[#18191d] focus:outline-none"
@@ -594,16 +676,16 @@ export default function Home() {
         {/* Navigation Modes */}
         <div className="space-y-1 pt-2 border-t border-[#eaebed] dark:border-[#1a1c26]">
           {[
-            { id: "talk", label: "Lecture Recording", icon: FileVideo },
-            { id: "math", label: "Past Exam PDF", icon: FileText },
-            { id: "homework", label: "Check My Working ✍️", icon: PenTool }
+            { id: "url", label: "YouTube / Teams URL 🔗", icon: LinkIcon },
+            { id: "talk", label: "Upload Lecture File 🎙️", icon: FileVideo },
+            { id: "math", label: "Past Exam PDF 📄", icon: FileText }
           ].map((m) => {
             const Icon = m.icon;
             const isSelected = mode === m.id;
             return (
               <button
                 key={m.id}
-                onClick={() => { setMode(m.id as any); if (m.id === "homework") setActiveTab("homework"); }}
+                onClick={() => setMode(m.id as any)}
                 className={`w-full p-2.5 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-all text-left ${
                   isSelected ? "bg-indigo-600 text-white font-bold shadow-sm" : `${textMuted} hover:bg-slate-200/50 dark:hover:bg-[#151722]`
                 }`}
@@ -635,25 +717,76 @@ export default function Home() {
           </span>
         </div>
 
-        {/* UPLOAD FORM */}
+        {/* UPLOAD & STREAM CONTAINER */}
         <div className={`border rounded-3xl p-6 sm:p-8 ${cardBg} print:hidden space-y-5`}>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer ${
-              isLight ? "border-[#d8d9de] hover:border-indigo-500 bg-[#f9f9fb]" : "border-[#2b2d35] hover:border-indigo-500 bg-[#101113]"
-            }`}>
-              <input
-                type="file"
-                id="file-upload"
-                className="hidden"
-                accept={mode === "talk" ? "video/*,audio/*" : "image/*,.pdf"}
-                onChange={(e) => { if (e.target.files && e.target.files[0]) setFile(e.target.files[0]); }}
-              />
-              <label htmlFor="file-upload" className="cursor-pointer flex flex-col items-center space-y-2">
-                <UploadCloud className="w-8 h-8 text-indigo-600" />
-                <p className="font-bold text-xs sm:text-sm">{file ? file.name : (mode === "talk" ? "Upload 3-Hour Lecture" : "Upload Past Exam PDF")}</p>
-                <span className={`text-[10px] ${textMuted}`}>Locked strictly to {studentInfo?.email}</span>
-              </label>
+          
+          {/* Segmented Switcher */}
+          <div className="flex justify-center">
+            <div className={`inline-flex p-1 rounded-2xl border text-xs ${isLight ? "bg-[#f4f4f6] border-[#eaebed]" : "bg-[#18191d] border-[#25262c]"}`}>
+              <button
+                onClick={() => setMode("url")}
+                className={`px-4 py-2 rounded-xl transition-all flex items-center gap-1.5 ${mode === "url" ? activePill : inactivePill}`}
+              >
+                <LinkIcon className="w-3.5 h-3.5" />
+                <span>Paste YouTube / Teams URL</span>
+              </button>
+              <button
+                onClick={() => setMode("talk")}
+                className={`px-4 py-2 rounded-xl transition-all flex items-center gap-1.5 ${mode === "talk" ? activePill : inactivePill}`}
+              >
+                <FileVideo className="w-3.5 h-3.5" />
+                <span>Upload Recording</span>
+              </button>
+              <button
+                onClick={() => setMode("math")}
+                className={`px-4 py-2 rounded-xl transition-all flex items-center gap-1.5 ${mode === "math" ? activePill : inactivePill}`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>Past Exam PDF</span>
+              </button>
             </div>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            
+            {mode === "url" ? (
+              <div className={`p-6 rounded-2xl border space-y-3 ${isLight ? "bg-[#f9f9fb] border-[#d8d9de]" : "bg-[#101113] border-[#2b2d35]"}`}>
+                <label className="block text-xs font-bold uppercase tracking-wider text-indigo-600">
+                  Paste YouTube, MS Teams, or Zoom URL (0MB Mobile Data Used):
+                </label>
+                <input
+                  type="text"
+                  placeholder="https://youtu.be/... or https://youtube.com/watch?v=..."
+                  value={lectureUrl}
+                  onChange={(e) => setLectureUrl(e.target.value)}
+                  className={`w-full px-4 py-3 rounded-xl border text-xs sm:text-sm focus:outline-none focus:border-indigo-600 ${
+                    isLight ? "bg-white border-[#eaebed]" : "bg-[#18191d] border-[#25262c]"
+                  }`}
+                />
+                <p className={`text-[11px] ${textMuted}`}>
+                  Downloads audio cloud-to-cloud without consuming your personal internet data bundles.
+                </p>
+              </div>
+            ) : (
+              <div className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer ${
+                isLight ? "border-[#d8d9de] hover:border-indigo-500 bg-[#f9f9fb]" : "border-[#2b2d35] hover:border-indigo-500 bg-[#101113]"
+              }`}>
+                <input
+                  type="file"
+                  id="file-upload"
+                  className="hidden"
+                  accept={mode === "talk" ? "video/*,audio/*" : "image/*,.pdf"}
+                  onChange={(e) => { if (e.target.files && e.target.files[0]) setFile(e.target.files[0]); }}
+                />
+                <label htmlFor="file-upload" className="cursor-pointer flex flex-col items-center space-y-2">
+                  <UploadCloud className="w-8 h-8 text-indigo-600" />
+                  <p className="font-bold text-xs sm:text-sm">
+                    {file ? file.name : (mode === "talk" ? "Upload 3-Hour Lecture Recording" : "Upload Past Exam Paper PDF")}
+                  </p>
+                  <span className={`text-[10px] ${textMuted}`}>Locked strictly to {studentInfo?.email}</span>
+                </label>
+              </div>
+            )}
 
             {error && (
               <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-600 text-xs font-semibold flex items-center gap-2">
@@ -664,11 +797,11 @@ export default function Home() {
 
             <button
               type="submit"
-              disabled={loading || !file}
+              disabled={loading || (mode === "url" ? !lectureUrl.trim() : !file)}
               className="w-full py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 font-bold text-white text-xs sm:text-sm shadow-md transition-all flex items-center justify-center gap-2"
             >
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-              <span>{loading ? statusMessage : `Process for ${activeModule ? activeModule.code : "Selected Module"}`}</span>
+              <span>{loading ? statusMessage : `Process for ${activeModule ? activeModule.code : "Selected Course"}`}</span>
             </button>
           </form>
         </div>
@@ -702,19 +835,59 @@ export default function Home() {
               })}
             </div>
 
-            {/* TAB 1: NOTES */}
+            {/* TAB 1: MASTER STUDY NOTES */}
             {activeTab === "notes" && (
               <div className={`border rounded-3xl p-6 sm:p-10 space-y-6 ${cardBg}`}>
-                <div className="flex justify-between items-center pb-4 border-b border-[#eaebed] dark:border-[#1a1c26] print:hidden">
-                  <span className="text-xs font-bold px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-600">
-                    Saved in Your Cloud Library
-                  </span>
-                  <button onClick={() => window.print()} className="px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1">
-                    <Printer className="w-3.5 h-3.5" /> PDF
-                  </button>
+                <div className="flex flex-wrap justify-between items-center pb-4 border-b border-[#eaebed] dark:border-[#1a1c26] gap-3 print:hidden">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-600">
+                      {activeModule?.code} Verified
+                    </span>
+                    <span className="text-xs font-semibold px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600">
+                      Exhaustive Curriculum Depth
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-xs">
+                    <button onClick={exportWordDoc} className="px-3 py-1.5 rounded-xl border font-semibold flex items-center gap-1">
+                      <Download className="w-3.5 h-3.5 text-blue-600" /> Word (.doc)
+                    </button>
+                    <button onClick={() => window.print()} className="px-3 py-1.5 rounded-xl border font-semibold flex items-center gap-1">
+                      <Printer className="w-3.5 h-3.5" /> PDF
+                    </button>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(result.notes || result.solution);
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 2000);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-indigo-600 text-white font-semibold flex items-center gap-1"
+                    >
+                      {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copied ? "Copied" : "Copy"}</span>
+                    </button>
+                  </div>
                 </div>
-                <article className={`prose max-w-none text-sm leading-relaxed ${isLight ? "prose-slate" : "prose-invert"}`}>
-                  <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+
+                <article className={`max-w-none text-sm leading-relaxed space-y-4 ${isLight ? "text-slate-800" : "text-slate-200"}`}>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkMath]}
+                    rehypePlugins={[rehypeKatex]}
+                    components={{
+                      h1: ({ children }) => <h1 className="text-2xl sm:text-3xl font-black text-indigo-600 pb-3 border-b mt-6 mb-4">{children}</h1>,
+                      h2: ({ children }) => <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white mt-8 mb-3 pb-2 border-b">{children}</h2>,
+                      h3: ({ children }) => <h3 className="text-base font-bold text-indigo-700 dark:text-indigo-300 mt-6 mb-2">{children}</h3>,
+                      blockquote: ({ children }) => <div className="p-4 my-4 rounded-2xl bg-amber-500/10 border-l-4 border-amber-500 text-amber-900 dark:text-amber-200 text-xs sm:text-sm font-medium">{children}</div>,
+                      table: ({ children }) => <div className="my-6 overflow-x-auto rounded-2xl border"><table className="w-full text-left text-xs sm:text-sm divide-y">{children}</table></div>,
+                      thead: ({ children }) => <thead className="bg-slate-100 dark:bg-slate-900 font-bold uppercase text-[11px]">{children}</thead>,
+                      th: ({ children }) => <th className="px-4 py-3">{children}</th>,
+                      td: ({ children }) => <td className="px-4 py-3 border-t">{children}</td>,
+                      ul: ({ children }) => <ul className="space-y-2 list-disc list-inside my-3">{children}</ul>,
+                      ol: ({ children }) => <ol className="space-y-2 list-decimal list-inside my-3">{children}</ol>,
+                      li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+                      strong: ({ children }) => <strong className="font-extrabold text-indigo-600 dark:text-indigo-400">{children}</strong>,
+                    }}
+                  >
                     {result.notes || result.solution}
                   </ReactMarkdown>
                 </article>
@@ -763,22 +936,34 @@ export default function Home() {
             {/* TAB 3: EXAM */}
             {activeTab === "exam" && (
               <div className={`border rounded-3xl p-6 sm:p-10 space-y-6 ${cardBg}`}>
-                <button onClick={handleGenerateExam} disabled={examLoading} className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow">
-                  {examLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                  <span>Generate Exam Paper</span>
-                </button>
+                <div className="flex items-center justify-between pb-4 border-b">
+                  <h3 className="font-bold text-sm flex items-center gap-2">
+                    <GraduationCap className="w-4 h-4 text-indigo-600" />
+                    University Examination Simulator
+                  </h3>
+                  <button onClick={handleGenerateExam} disabled={examLoading} className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow">
+                    {examLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                    <span>Generate Paper</span>
+                  </button>
+                </div>
+
                 {examData && (
-                  <div className="space-y-4">
-                    {examData.section_a_mcq?.map((q: any, i: number) => (
-                      <div key={q.id} className="p-4 border rounded-xl space-y-2 text-xs">
-                        <span className="font-bold">Q{i + 1}. {q.question}</span>
-                        <div className="grid grid-cols-1 gap-1 pt-1">
-                          {q.options.map((opt: string, idx: number) => (
-                            <button key={idx} className="p-2 border rounded-lg text-left hover:border-indigo-500">{opt}</button>
-                          ))}
-                        </div>
+                  <div className="space-y-6">
+                    {examData.section_a_mcq && (
+                      <div className="space-y-3">
+                        <span className="text-xs font-bold uppercase tracking-wider text-indigo-600">Section A: Diagnostic Questions</span>
+                        {examData.section_a_mcq.map((q: any, i: number) => (
+                          <div key={q.id} className="p-4 border rounded-xl space-y-2 text-xs">
+                            <span className="font-bold">Q{i + 1}. {q.question}</span>
+                            <div className="grid grid-cols-1 gap-1 pt-1">
+                              {q.options.map((opt: string, idx: number) => (
+                                <button key={idx} className="p-2 border rounded-lg text-left hover:border-indigo-500">{opt}</button>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    )}
                   </div>
                 )}
               </div>
@@ -795,10 +980,20 @@ export default function Home() {
               </div>
             )}
 
-            {/* TAB 5: TUTOR */}
+            {/* TAB 5: VOICE & TEXT AI TUTOR (MICROPHONE & SQUARE FULLY WIRED!) */}
             {activeTab === "tutor" && (
-              <div className={`border rounded-3xl p-6 space-y-4 ${cardBg}`}>
-                <span className="font-bold text-sm block">Voice & Text AI Tutor</span>
+              <div className={`border rounded-3xl p-6 sm:p-10 space-y-5 ${cardBg}`}>
+                <div>
+                  <h3 className="font-bold text-sm flex items-center gap-1.5">
+                    <MessageSquare className="w-4 h-4 text-indigo-600" />
+                    Lecture AI Tutor (Text or Voice)
+                  </h3>
+                  <p className={`text-xs ${textMuted}`}>
+                    Click the microphone to speak your question out loud or type below.
+                  </p>
+                </div>
+
+                {/* Voice & Text Input Form */}
                 <form onSubmit={async (e) => {
                   e.preventDefault();
                   if (!chatQuestion.trim()) return;
@@ -808,24 +1003,77 @@ export default function Home() {
                   const res = await fetch("http://127.0.0.1:8000/api/chat", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ question: q, transcript: result.transcript })
+                    body: JSON.stringify({ question: q, transcript: result?.transcript || "" })
                   });
                   const d = await res.json();
                   setChatMessages(p => [...p, { sender: "ai", text: d.answer }]);
-                }} className="flex gap-2">
+                }} className="flex gap-2 items-center">
                   <input
                     type="text"
                     value={chatQuestion}
                     onChange={(e) => setChatQuestion(e.target.value)}
-                    placeholder="Ask anything..."
-                    className="flex-1 px-3 py-2 text-xs border rounded-xl"
+                    placeholder="Type or click the microphone to speak..."
+                    className={`flex-1 px-4 py-3 text-xs sm:text-sm rounded-xl border focus:outline-none ${
+                      isLight ? "bg-white border-[#eaebed]" : "bg-[#18191d] border-[#222429]"
+                    }`}
                   />
-                  <button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold">Ask</button>
+
+                  {/* Microphone / Stop Recording Button */}
+                  {!isRecording ? (
+                    <button
+                      type="button"
+                      onClick={startRecording}
+                      title="Speak your question out loud"
+                      className="p-3 rounded-xl border border-[#eaebed] dark:border-[#222429] hover:bg-slate-50 dark:hover:bg-[#1a1b1f] text-indigo-600 transition-all flex items-center justify-center"
+                    >
+                      <Mic className="w-4 h-4" />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={stopRecording}
+                      title="Stop recording and send question"
+                      className="p-3 rounded-xl bg-red-600 text-white animate-pulse transition-all flex items-center justify-center shadow-lg shadow-red-600/30"
+                    >
+                      <Square className="w-4 h-4" />
+                    </button>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={chatLoading}
+                    className="px-5 py-3 rounded-xl bg-indigo-600 text-white font-bold text-xs flex items-center gap-1.5 shadow"
+                  >
+                    {chatLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                    <span>Ask</span>
+                  </button>
                 </form>
-                <div className="space-y-2 max-h-48 overflow-y-auto text-xs">
+
+                {/* Pulsing Recording Alert */}
+                {isRecording && (
+                  <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-600 text-xs font-semibold flex items-center gap-2 animate-pulse">
+                    <span className="w-2.5 h-2.5 rounded-full bg-red-600"></span>
+                    <span>Recording your voice... Speak your question, then click the red square to send!</span>
+                  </div>
+                )}
+
+                {/* Messages Display */}
+                <div className="space-y-3 max-h-72 overflow-y-auto pt-2">
                   {chatMessages.map((m, i) => (
-                    <div key={i} className={`p-3 rounded-xl ${m.sender === "user" ? "bg-indigo-600 text-white ml-8" : "bg-slate-100 dark:bg-slate-800 mr-8"}`}>
-                      <strong>{m.sender === "user" ? "You" : "Tutor"}:</strong> {m.text}
+                    <div
+                      key={i}
+                      className={`p-4 rounded-2xl text-xs sm:text-sm leading-relaxed ${
+                        m.sender === "user"
+                          ? "bg-indigo-600 text-white ml-8 shadow-sm"
+                          : isLight ? "bg-[#f4f4f6] text-black mr-8" : "bg-[#18191d] border border-[#222429] mr-8"
+                      }`}
+                    >
+                      <strong className="block text-[10px] uppercase tracking-wider mb-1 opacity-70">
+                        {m.sender === "user" ? "You" : "Lecture AI Tutor"}
+                      </strong>
+                      <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                        {m.text}
+                      </ReactMarkdown>
                     </div>
                   ))}
                 </div>
