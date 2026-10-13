@@ -29,8 +29,11 @@ import {
   Square,
   Link as LinkIcon,
   ShieldCheck,
+  Calendar,
   PenTool,
   Folder,
+  CheckCircle,
+  TrendingDown,
   Plus,
   Trash2,
   Lock,
@@ -39,6 +42,9 @@ import {
 } from "lucide-react";
 
 export default function Home() {
+  // Use Vercel's NEXT_PUBLIC_API_URL, fallback to Render
+  const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "https://video-notes-compressor.onrender.com").replace(/\/$/, "");
+
   const [theme, setTheme] = useState<"light" | "dark">("light");
   
   // Student Auth State
@@ -57,8 +63,8 @@ export default function Home() {
   const [lectureUrl, setLectureUrl] = useState("");
   const [homeworkProblem, setHomeworkProblem] = useState("");
 
-  // Workspaces: "notes" | "flashcards" | "exam" | "audio" | "tutor"
-  const [activeTab, setActiveTab] = useState<"notes" | "flashcards" | "exam" | "audio" | "tutor">("notes");
+  // Workspaces
+  const [activeTab, setActiveTab] = useState<"notes" | "flashcards" | "exam" | "studyplan" | "homework" | "audio" | "tutor">("notes");
   
   // Pipeline State
   const [jobId, setJobId] = useState<string | null>(null);
@@ -91,6 +97,14 @@ export default function Home() {
   const [examDifficulty, setExamDifficulty] = useState<"test" | "exam">("exam");
   const [examData, setExamData] = useState<any>(null);
   const [examLoading, setExamLoading] = useState(false);
+  const [mcqAnswers, setMcqAnswers] = useState<{ [key: number]: number }>({});
+  const [mcqSubmitted, setMcqSubmitted] = useState(false);
+  const [revealedSolutions, setRevealedSolutions] = useState<{ [key: number]: boolean }>({});
+  const [weakTopics, setWeakTopics] = useState<string[]>([]);
+
+  // Homework Review
+  const [homeworkReview, setHomeworkReview] = useState<string | null>(null);
+  const [homeworkLoading, setHomeworkLoading] = useState(false);
 
   // Chat & Voice Recording State
   const [chatQuestion, setChatQuestion] = useState("");
@@ -109,7 +123,7 @@ export default function Home() {
     const token = localStorage.getItem("student_auth_token");
     if (token) {
       setStudentToken(token);
-      fetch("https://video-notes-compressor.onrender.com/api/auth/me", {
+      fetch(`${API_BASE}/api/auth/me`, {
         headers: { Authorization: `Bearer ${token}` }
       })
       .then(r => r.json())
@@ -124,7 +138,7 @@ export default function Home() {
       })
       .catch(() => logout());
     }
-  }, []);
+  }, [API_BASE]);
 
   const loadStudentModules = (email: string) => {
     const savedMods = localStorage.getItem(`student_modules_${email.toLowerCase().trim()}`);
@@ -142,7 +156,7 @@ export default function Home() {
 
   const loadStudentLibrary = async (token: string) => {
     try {
-      const res = await fetch("https://video-notes-compressor.onrender.com/api/student/lectures", {
+      const res = await fetch(`${API_BASE}/api/student/lectures`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
@@ -159,8 +173,8 @@ export default function Home() {
     setAuthError(null);
 
     const endpoint = authMode === "login" 
-      ? "https://video-notes-compressor.onrender.com/api/auth/login" 
-      : "https://video-notes-compressor.onrender.com/api/auth/register";
+      ? `${API_BASE}/api/auth/login` 
+      : `${API_BASE}/api/auth/register`;
 
     const payload = authMode === "login" 
       ? { email: authEmail, password: authPassword }
@@ -271,13 +285,12 @@ export default function Home() {
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`https://video-notes-compressor.onrender.com/api/jobs/${jobId}`, {
+        const res = await fetch(`${API_BASE}/api/jobs/${jobId}`, {
           headers: { Authorization: `Bearer ${studentToken}` }
         });
         if (!res.ok) return;
 
         const data = await res.json();
-
         setJobStatus(data.status);
         setStatusMessage(data.status_message);
 
@@ -299,7 +312,7 @@ export default function Home() {
     }, 1200);
 
     return () => clearInterval(interval);
-  }, [jobId, jobStatus, studentToken]);
+  }, [jobId, jobStatus, studentToken, API_BASE]);
 
   const changeSpeed = (s: number) => {
     setPlaybackSpeed(s);
@@ -326,7 +339,7 @@ export default function Home() {
       let res;
       if (mode === "url") {
         if (!lectureUrl.trim()) throw new Error("Please enter a valid YouTube or Teams URL.");
-        res = await fetch("https://video-notes-compressor.onrender.com/api/process/url", {
+        res = await fetch(`${API_BASE}/api/process/url`, {
           method: "POST",
           headers: { 
             "Content-Type": "application/json",
@@ -342,7 +355,7 @@ export default function Home() {
         const formData = new FormData();
         formData.append("file", file);
         formData.append("module_code", activeModule.code);
-        const endpoint = mode === "talk" ? "https://video-notes-compressor.onrender.com/api/process/talk" : "https://video-notes-compressor.onrender.com/api/process/math";
+        const endpoint = mode === "talk" ? `${API_BASE}/api/process/talk` : `${API_BASE}/api/process/math`;
         res = await fetch(endpoint, {
           method: "POST",
           headers: { Authorization: `Bearer ${studentToken}` },
@@ -388,7 +401,7 @@ export default function Home() {
         formData.append("transcript", result?.transcript || "");
 
         try {
-          const res = await fetch("https://video-notes-compressor.onrender.com/api/voice-chat", {
+          const res = await fetch(`${API_BASE}/api/voice-chat`, {
             method: "POST",
             body: formData,
           });
@@ -430,9 +443,13 @@ export default function Home() {
     if (!result?.transcript) return;
     setExamLoading(true);
     setExamData(null);
+    setMcqAnswers({});
+    setMcqSubmitted(false);
+    setRevealedSolutions({});
+    setWeakTopics([]);
 
     try {
-      const res = await fetch("https://video-notes-compressor.onrender.com/api/generate-exam", {
+      const res = await fetch(`${API_BASE}/api/generate-exam`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ transcript: result.transcript, difficulty: examDifficulty })
@@ -870,6 +887,7 @@ export default function Home() {
                   </div>
                 </div>
 
+                {/* TEXTBOOK-GRADE CLEAN FORMATTER */}
                 <article className={`max-w-none text-sm leading-relaxed space-y-4 ${isLight ? "text-slate-800" : "text-slate-200"}`}>
                   <ReactMarkdown
                     remarkPlugins={[remarkMath]}
@@ -981,7 +999,7 @@ export default function Home() {
               </div>
             )}
 
-            {/* TAB 5: VOICE & TEXT AI TUTOR (MICROPHONE & SQUARE FULLY WIRED!) */}
+            {/* TAB 5: VOICE & TEXT AI TUTOR */}
             {activeTab === "tutor" && (
               <div className={`border rounded-3xl p-6 sm:p-10 space-y-5 ${cardBg}`}>
                 <div>
@@ -1001,7 +1019,7 @@ export default function Home() {
                   const q = chatQuestion;
                   setChatMessages(p => [...p, { sender: "user", text: q }]);
                   setChatQuestion("");
-                  const res = await fetch("https://video-notes-compressor.onrender.com/api/chat", {
+                  const res = await fetch(`${API_BASE}/api/chat`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ question: q, transcript: result?.transcript || "" })
@@ -1054,7 +1072,7 @@ export default function Home() {
                 {isRecording && (
                   <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-600 text-xs font-semibold flex items-center gap-2 animate-pulse">
                     <span className="w-2.5 h-2.5 rounded-full bg-red-600"></span>
-                    <span>Recording your voice... Speak your question, then click the red square to send!</span>
+                    <span>Recording your voice... Speak your question, then click the red square when done!</span>
                   </div>
                 )}
 
