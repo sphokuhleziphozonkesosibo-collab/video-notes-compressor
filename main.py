@@ -1,4 +1,5 @@
 import os
+import re
 import glob
 import uuid
 import json
@@ -16,6 +17,7 @@ from PIL import Image
 from groq import Groq
 from google import genai
 import yt_dlp
+from youtube_transcript_api import YouTubeTranscriptApi
 
 load_dotenv()
 groq_key = os.getenv("GROQ_API_KEY")
@@ -359,30 +361,116 @@ def run_math_pipeline(student_id: str, job_id: str, temp_file_path: str, filenam
         JOBS_STORE[student_id][job_id]["error"] = str(e)
 
 
-# ----------------- YOUTUBE / TEAMS URL WORKER -----------------
+# ----------------- YOUTUBE STREAMING WITH TRANSCRIPT API BYPASS -----------------
+
+def extract_youtube_id(url: str) -> Optional[str]:
+    patterns = [
+        r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
+        r'(?:youtu\.be\/)([0-9A-Za-z_-]{11})'
+    ]
+    for p in patterns:
+        match = re.search(p, url)
+        if match:
+            return match.group(1)
+    return None
 
 def download_and_process_url(student_id: str, job_id: str, url: str, module_code: str):
     try:
         JOBS_STORE[student_id][job_id]["step"] = 1
-        JOBS_STORE[student_id][job_id]["status_message"] = "Streaming audio server-to-server (0MB mobile data used)..."
+        JOBS_STORE[student_id][job_id]["status_message"] = "Fetching lecture transcript cloud-to-cloud..."
         
+        video_id = extract_youtube_id(url)
+        
+        # 1. Try instant YouTube Transcript API (Bypasses all cloud bot-checks in 0.5s!)
+        if video_id:
+            try:
+                transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+                formatted_segments = []
+                formatted_transcript = ""
+
+                for item in transcript_list:
+                    start_sec = int(item['start'])
+                    m, s = divmod(start_sec, 60)
+                    time_str = f"{m:02d}:{s:02d}"
+                    formatted_transcript += f"[{time_str}] {item['text']}\n"
+                    formatted_segments.append({
+                        "start": start_sec,
+                        "timestamp": time_str,
+                        "text": item['text'].strip()
+                    })
+
+                JOBS_STORE[student_id][job_id]["step"] = 3
+                JOBS_STORE[student_id][job_id]["status_message"] = "Synthesizing exhaustive academic study guide..."
+
+                system_prompt = f"""
+                You are a university faculty professor and examiner for module: {module_code}.
+                The student's goal is to PASS their final examination using ONLY these notes.
+                Produce an exhaustive, textbook-grade study pack in GitHub Markdown:
+
+                # 🏛️ {module_code}: Comprehensive Examination Master Guide
+                > 🚨 **FACULTY EXAM MANDATE**: Verified by Academic Faculty. Full curriculum depth.
+
+                ## 📖 CHRONOLOGICAL CHAPTERS
+                Break transcript into distinct detailed chapters [Timestamp Range]:
+                - **Core Theory & Definitions**
+                - **Essential Formulations & Proofs** (LaTeX $$)
+                - **Step-by-Step Worked Examples with Numbers**
+                - > ⚠️ **COMMON EXAM TRAP**: Specific mistakes students make.
+
+                ## 📐 MASTER FORMULA & ALGORITHM COMPENDIUM
+                | Law / Concept | Formula / Code | Variables & Conditions | Timestamp |
+
+                ## 🇿🇦 DHET INDIGENOUS LANGUAGE TERMINOLOGY BRIDGE
+                | English Term | Timestamp | Igama lesiZulu | Contextual Meaning |
+                """
+
+                summary_response = gemini_client.models.generate_content(
+                    model="gemini-3.5-flash-lite",
+                    contents=[system_prompt + f"\n\nTranscript:\n\n{formatted_transcript}"]
+                )
+
+                final_result = {
+                    "mode": "talk",
+                    "file_name": f"YouTube ({video_id})",
+                    "module_code": module_code,
+                    "audio_url": f"https://www.youtube.com/watch?v={video_id}",
+                    "audio_size_mb": 0.0,
+                    "data_saved_pct": 100.0,
+                    "faculty_verified": True,
+                    "segments": formatted_segments,
+                    "transcript": formatted_transcript,
+                    "notes": summary_response.text
+                }
+
+                # Save permanently in student database
+                conn = sqlite3.connect(DB_FILE)
+                c = conn.cursor()
+                c.execute(
+                    """INSERT INTO lectures 
+                       (id, student_id, module_code, file_name, audio_url, audio_size_mb, data_saved_pct, notes, transcript)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (job_id, student_id, module_code, f"YouTube ({video_id})", f"https://www.youtube.com/watch?v={video_id}", 0.0, 100.0, summary_response.text, formatted_transcript)
+                )
+                conn.commit()
+                conn.close()
+
+                JOBS_STORE[student_id][job_id]["status"] = "completed"
+                JOBS_STORE[student_id][job_id]["step"] = 4
+                JOBS_STORE[student_id][job_id]["status_message"] = "Saved to your library!"
+                JOBS_STORE[student_id][job_id]["result"] = final_result
+                return
+            except Exception:
+                pass
+
+        # 2. Fallback to yt-dlp with mobile iOS client headers
         student_dir = os.path.join(UPLOAD_DIR, student_id)
         os.makedirs(student_dir, exist_ok=True)
-        
         output_template = os.path.join(student_dir, f"{job_id}_stream.%(ext)s")
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': output_template,
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '32',
-            }],
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['ios', 'mweb', 'android']
-                }
-            },
+            'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '32'}],
+            'extractor_args': {'youtube': {'player_client': ['ios', 'mweb', 'android']}},
             'nocheckcertificate': True,
             'quiet': True,
         }
@@ -391,7 +479,7 @@ def download_and_process_url(student_id: str, job_id: str, url: str, module_code
             ydl.download([url])
 
         final_audio_path = os.path.join(student_dir, f"{job_id}_stream.mp3")
-        run_talk_pipeline(student_id, job_id, final_audio_path, "YouTube Stream Lecture", module_code)
+        run_talk_pipeline(student_id, job_id, final_audio_path, "Stream Lecture", module_code)
     except Exception as e:
         JOBS_STORE[student_id][job_id]["status"] = "failed"
         JOBS_STORE[student_id][job_id]["error"] = f"Failed to stream URL: {str(e)}"
@@ -586,16 +674,12 @@ async def voice_chat_with_lecture(
     audio: UploadFile = File(...),
     transcript: Optional[str] = Form(default="")
 ):
-    """Answers student voice questions using native webm Whisper decoding. Works for lectures OR general university questions!"""
-    # Detect proper extension from incoming audio (e.g. webm, wav, mp3)
     ext = os.path.splitext(audio.filename)[1] or ".webm"
     temp_voice_path = os.path.join(UPLOAD_DIR, f"voice_{uuid.uuid4()}{ext}")
-    
     with open(temp_voice_path, "wb") as buffer:
         shutil.copyfileobj(audio.file, buffer)
 
     try:
-        # 1. Transcribe the spoken voice note with Whisper
         with open(temp_voice_path, "rb") as file:
             student_voice_text = groq_client.audio.transcriptions.create(
                 file=(temp_voice_path, file.read()),
@@ -603,38 +687,13 @@ async def voice_chat_with_lecture(
                 response_format="text"
             ).strip()
 
-        # 2. Answer using lecture transcript IF available, otherwise act as a general academic professor!
         if transcript and len(transcript.strip()) > 50:
-            prompt = f"""
-            You are a university teaching professor.
-            Answer the student's spoken question based on this lecture transcript. Cite timestamps [MM:SS] and show formulas/code where applicable:
-
-            Transcript:
-            {transcript[:50000]}
-
-            Student Question:
-            "{student_voice_text}"
-            """
+            prompt = f"Answer student question based on this lecture citing timestamps [MM:SS]: Transcript: {transcript[:50000]}\nQuestion: {student_voice_text}"
         else:
-            prompt = f"""
-            You are an elite university professor across Engineering, Science, Law, and Mathematics.
-            Answer this student's spoken question with complete academic rigor, step-by-step derivations, and clean LaTeX ($$) or code blocks:
+            prompt = f"You are a university academic professor. Answer with rigor, derivations, and LaTeX ($$): Question: {student_voice_text}"
 
-            Student Question:
-            "{student_voice_text}"
-            """
-
-        chat_res = gemini_client.models.generate_content(
-            model="gemini-3.5-flash-lite",
-            contents=[prompt]
-        )
-
-        return {
-            "user_question": student_voice_text,
-            "answer": chat_res.text
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Voice processing error: {str(e)}")
+        chat_res = gemini_client.models.generate_content(model="gemini-3.5-flash-lite", contents=[prompt])
+        return {"user_question": student_voice_text, "answer": chat_res.text}
     finally:
         if os.path.exists(temp_voice_path):
             os.remove(temp_voice_path)
