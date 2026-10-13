@@ -5,3 +5,5 @@ groq
 google-genai
 pillow
 python-dotenv
+fpdf2
+yt-dlp
