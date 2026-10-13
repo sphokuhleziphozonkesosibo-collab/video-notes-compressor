@@ -142,7 +142,7 @@ export default function Home() {
 
   const loadStudentLibrary = async (token: string) => {
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/student/lectures", {
+      const res = await fetch("https://video-notes-compressor.onrender.com/api/student/lectures", {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
@@ -159,8 +159,8 @@ export default function Home() {
     setAuthError(null);
 
     const endpoint = authMode === "login" 
-      ? "http://127.0.0.1:8000/api/auth/login" 
-      : "http://127.0.0.1:8000/api/auth/register";
+      ? "https://video-notes-compressor.onrender.com/api/auth/login" 
+      : "https://video-notes-compressor.onrender.com/api/auth/register";
 
     const payload = authMode === "login" 
       ? { email: authEmail, password: authPassword }
@@ -271,12 +271,13 @@ export default function Home() {
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`http://127.0.0.1:8000/api/jobs/${jobId}`, {
+        const res = await fetch(`https://video-notes-compressor.onrender.com/api/jobs/${jobId}`, {
           headers: { Authorization: `Bearer ${studentToken}` }
         });
         if (!res.ok) return;
 
         const data = await res.json();
+
         setJobStatus(data.status);
         setStatusMessage(data.status_message);
 
@@ -325,7 +326,7 @@ export default function Home() {
       let res;
       if (mode === "url") {
         if (!lectureUrl.trim()) throw new Error("Please enter a valid YouTube or Teams URL.");
-        res = await fetch("http://127.0.0.1:8000/api/process/url", {
+        res = await fetch("https://video-notes-compressor.onrender.com/api/process/url", {
           method: "POST",
           headers: { 
             "Content-Type": "application/json",
@@ -341,7 +342,7 @@ export default function Home() {
         const formData = new FormData();
         formData.append("file", file);
         formData.append("module_code", activeModule.code);
-        const endpoint = mode === "talk" ? "http://127.0.0.1:8000/api/process/talk" : "http://127.0.0.1:8000/api/process/math";
+        const endpoint = mode === "talk" ? "https://video-notes-compressor.onrender.com/api/process/talk" : "https://video-notes-compressor.onrender.com/api/process/math";
         res = await fetch(endpoint, {
           method: "POST",
           headers: { Authorization: `Bearer ${studentToken}` },
@@ -387,7 +388,7 @@ export default function Home() {
         formData.append("transcript", result?.transcript || "");
 
         try {
-          const res = await fetch("http://127.0.0.1:8000/api/voice-chat", {
+          const res = await fetch("https://video-notes-compressor.onrender.com/api/voice-chat", {
             method: "POST",
             body: formData,
           });
@@ -431,7 +432,7 @@ export default function Home() {
     setExamData(null);
 
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/generate-exam", {
+      const res = await fetch("https://video-notes-compressor.onrender.com/api/generate-exam", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ transcript: result.transcript, difficulty: examDifficulty })
@@ -1000,7 +1001,7 @@ export default function Home() {
                   const q = chatQuestion;
                   setChatMessages(p => [...p, { sender: "user", text: q }]);
                   setChatQuestion("");
-                  const res = await fetch("http://127.0.0.1:8000/api/chat", {
+                  const res = await fetch("https://video-notes-compressor.onrender.com/api/chat", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ question: q, transcript: result?.transcript || "" })
