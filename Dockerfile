@@ -1,20 +1,24 @@
 FROM python:3.11-slim
 
-# Install FFmpeg
+# Install FFmpeg for media compression and audio chunking
 RUN apt-get update && \
-    apt-get install -y ffmpeg && \
+    apt-get install -y --no-install-recommends ffmpeg && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install dependencies
+# Install Python requirements
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source code
+# Copy source code and database
 COPY main.py .
+COPY .env* ./
 
-# Expose port and start server
-EXPOSE 8000
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Render requires port 10000
+ENV PORT=10000
+EXPOSE 10000
+
+# Start Uvicorn bound to port 10000
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT}"]
