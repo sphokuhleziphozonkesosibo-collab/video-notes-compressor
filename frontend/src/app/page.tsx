@@ -109,7 +109,7 @@ export default function Home() {
     const token = localStorage.getItem("student_auth_token");
     if (token) {
       setStudentToken(token);
-      fetch("http://127.0.0.1:8000/api/auth/me", {
+      fetch("https://video-notes-compressor.onrender.com/api/auth/me", {
         headers: { Authorization: `Bearer ${token}` }
       })
       .then(r => r.json())
