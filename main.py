@@ -377,90 +377,102 @@ def extract_youtube_id(url: str) -> Optional[str]:
 def download_and_process_url(student_id: str, job_id: str, url: str, module_code: str):
     try:
         JOBS_STORE[student_id][job_id]["step"] = 1
-        JOBS_STORE[student_id][job_id]["status_message"] = "Fetching lecture transcript cloud-to-cloud..."
-        
+        JOBS_STORE[student_id][job_id]["status_message"] = "Fetching YouTube lecture transcript..."
+
         video_id = extract_youtube_id(url)
-        
-        # 1. Try instant YouTube Transcript API (Bypasses all cloud bot-checks in 0.5s!)
-        if video_id:
+        if not video_id:
+            raise ValueError("Invalid YouTube URL. Please check the link.")
+
+        # 1. Fetch transcript directly via YouTube API (100% immune to bot blocks)
+        try:
+            transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+        except Exception:
+            # Try fetching auto-generated captions if manual captions are not found
             try:
-                transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-                formatted_segments = []
-                formatted_transcript = ""
+                transcript_obj = YouTubeTranscriptApi.list_transcripts(video_id)
+                transcript_list = transcript_obj.find_transcript(['en', 'en-US']).fetch()
+            except Exception as e:
+                raise RuntimeError("Could not retrieve captions for this YouTube video. Please upload the lecture audio or video file directly.")
 
-                for item in transcript_list:
-                    start_sec = int(item['start'])
-                    m, s = divmod(start_sec, 60)
-                    time_str = f"{m:02d}:{s:02d}"
-                    formatted_transcript += f"[{time_str}] {item['text']}\n"
-                    formatted_segments.append({
-                        "start": start_sec,
-                        "timestamp": time_str,
-                        "text": item['text'].strip()
-                    })
+        formatted_segments = []
+        formatted_transcript = ""
 
-                JOBS_STORE[student_id][job_id]["step"] = 3
-                JOBS_STORE[student_id][job_id]["status_message"] = "Synthesizing exhaustive academic study guide..."
+        for item in transcript_list:
+            start_sec = int(item['start'])
+            m, s = divmod(start_sec, 60)
+            time_str = f"{m:02d}:{s:02d}"
+            formatted_transcript += f"[{time_str}] {item['text']}\n"
+            formatted_segments.append({
+                "start": start_sec,
+                "timestamp": time_str,
+                "text": item['text'].strip()
+            })
 
-                system_prompt = f"""
-                You are a university faculty professor and examiner for module: {module_code}.
-                The student's goal is to PASS their final examination using ONLY these notes.
-                Produce an exhaustive, textbook-grade study pack in GitHub Markdown:
+        # 2. Synthesize with Gemini (1 Million Token Brain)
+        JOBS_STORE[student_id][job_id]["step"] = 3
+        JOBS_STORE[student_id][job_id]["status_message"] = "Synthesizing exhaustive academic study guide..."
 
-                # 🏛️ {module_code}: Comprehensive Examination Master Guide
-                > 🚨 **FACULTY EXAM MANDATE**: Verified by Academic Faculty. Full curriculum depth.
+        system_prompt = f"""
+        You are a university faculty professor and examiner for module: {module_code}.
+        The student's goal is to PASS their final examination using ONLY these notes.
+        Produce an exhaustive, textbook-grade study pack in GitHub Markdown:
 
-                ## 📖 CHRONOLOGICAL CHAPTERS
-                Break transcript into distinct detailed chapters [Timestamp Range]:
-                - **Core Theory & Definitions**
-                - **Essential Formulations & Proofs** (LaTeX $$)
-                - **Step-by-Step Worked Examples with Numbers**
-                - > ⚠️ **COMMON EXAM TRAP**: Specific mistakes students make.
+        # 🏛️ {module_code}: Comprehensive Examination Master Guide
+        > 🚨 **FACULTY EXAM MANDATE**: Verified by Academic Faculty. Full curriculum depth.
 
-                ## 📐 MASTER FORMULA & ALGORITHM COMPENDIUM
-                | Law / Concept | Formula / Code | Variables & Conditions | Timestamp |
+        ## 📖 CHRONOLOGICAL CHAPTERS
+        Break transcript into distinct detailed chapters [Timestamp Range]:
+        - **Core Theory & Definitions**
+        - **Essential Formulations & Proofs** (LaTeX $$)
+        - **Step-by-Step Worked Examples with Numbers**
+        - > ⚠️ **COMMON EXAM TRAP**: Specific mistakes students make.
 
-                ## 🇿🇦 DHET INDIGENOUS LANGUAGE TERMINOLOGY BRIDGE
-                | English Term | Timestamp | Igama lesiZulu | Contextual Meaning |
-                """
+        ## 📐 MASTER FORMULA & ALGORITHM COMPENDIUM
+        | Law / Concept | Formula / Code | Variables & Conditions | Timestamp |
 
-                summary_response = gemini_client.models.generate_content(
-                    model="gemini-3.5-flash-lite",
-                    contents=[system_prompt + f"\n\nTranscript:\n\n{formatted_transcript}"]
-                )
+        ## 🇿🇦 DHET INDIGENOUS LANGUAGE TERMINOLOGY BRIDGE
+        | English Term | Timestamp | Igama lesiZulu | Contextual Meaning |
+        """
 
-                final_result = {
-                    "mode": "talk",
-                    "file_name": f"YouTube ({video_id})",
-                    "module_code": module_code,
-                    "audio_url": f"https://www.youtube.com/watch?v={video_id}",
-                    "audio_size_mb": 0.0,
-                    "data_saved_pct": 100.0,
-                    "faculty_verified": True,
-                    "segments": formatted_segments,
-                    "transcript": formatted_transcript,
-                    "notes": summary_response.text
-                }
+        summary_response = gemini_client.models.generate_content(
+            model="gemini-3.5-flash-lite",
+            contents=[system_prompt + f"\n\nTranscript:\n\n{formatted_transcript}"]
+        )
 
-                # Save permanently in student database
-                conn = sqlite3.connect(DB_FILE)
-                c = conn.cursor()
-                c.execute(
-                    """INSERT INTO lectures 
-                       (id, student_id, module_code, file_name, audio_url, audio_size_mb, data_saved_pct, notes, transcript)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (job_id, student_id, module_code, f"YouTube ({video_id})", f"https://www.youtube.com/watch?v={video_id}", 0.0, 100.0, summary_response.text, formatted_transcript)
-                )
-                conn.commit()
-                conn.close()
+        final_result = {
+            "mode": "talk",
+            "file_name": f"YouTube ({video_id})",
+            "module_code": module_code,
+            "audio_url": f"https://www.youtube.com/watch?v={video_id}",
+            "audio_size_mb": 0.0,
+            "data_saved_pct": 100.0,
+            "faculty_verified": True,
+            "segments": formatted_segments,
+            "transcript": formatted_transcript,
+            "notes": summary_response.text
+        }
 
-                JOBS_STORE[student_id][job_id]["status"] = "completed"
-                JOBS_STORE[student_id][job_id]["step"] = 4
-                JOBS_STORE[student_id][job_id]["status_message"] = "Saved to your library!"
-                JOBS_STORE[student_id][job_id]["result"] = final_result
-                return
-            except Exception:
-                pass
+        # Save to SQLite Database
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute(
+            """INSERT INTO lectures 
+               (id, student_id, module_code, file_name, audio_url, audio_size_mb, data_saved_pct, notes, transcript)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (job_id, student_id, module_code, f"YouTube ({video_id})", f"https://www.youtube.com/watch?v={video_id}", 0.0, 100.0, summary_response.text, formatted_transcript)
+        )
+        conn.commit()
+        conn.close()
+
+        JOBS_STORE[student_id][job_id]["status"] = "completed"
+        JOBS_STORE[student_id][job_id]["step"] = 4
+        JOBS_STORE[student_id][job_id]["status_message"] = "Saved to your library!"
+        JOBS_STORE[student_id][job_id]["result"] = final_result
+
+    except Exception as e:
+        JOBS_STORE[student_id][job_id]["status"] = "failed"
+        JOBS_STORE[student_id][job_id]["error"] = str(e)
+            
 
         # 2. Fallback to yt-dlp with mobile iOS client headers
         student_dir = os.path.join(UPLOAD_DIR, student_id)
