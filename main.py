@@ -380,7 +380,7 @@ def download_and_process_url(student_id: str, job_id: str, url: str, module_code
             }],
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'web']
+                    'player_client': ['ios', 'mweb', 'android']
                 }
             },
             'nocheckcertificate': True,
